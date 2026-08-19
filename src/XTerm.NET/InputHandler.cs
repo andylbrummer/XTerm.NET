@@ -912,12 +912,38 @@ public class InputHandler
         }
     }
 
+    /// <summary>
+    /// Clamps a line-count parameter to the scroll region.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A terminal cannot insert, delete or scroll more lines than the region holds — every line
+    /// beyond that is a no-op on an already-blank region. Without the clamp the loop runs once per
+    /// requested line, so <c>CSI 999999999 L</c> is an effectively infinite loop that also splices
+    /// the line list a billion times.
+    /// </para>
+    /// <para>
+    /// That is not a theoretical input. These are ordinary VT sequences with a large parameter,
+    /// reachable by <c>cat</c>-ing a file that happens to contain the bytes, and a host embedding
+    /// this parser in a read loop would hang that loop with no way back. xterm and every other
+    /// implementation clamp here for the same reason.
+    /// </para>
+    /// </remarks>
+    private int ClampToScrollRegion(int count)
+    {
+        var region = _buffer.ScrollBottom - _buffer.ScrollTop + 1;
+        if (region < 1) region = 1;
+        return Math.Min(count, region);
+    }
+
     private void InsertLines(Params parameters)
     {
         var count = Math.Max(parameters.GetParam(0, 1), 1);
         // Only works in scroll region
         if (_buffer.Y < _buffer.ScrollTop || _buffer.Y > _buffer.ScrollBottom)
             return;
+
+        count = ClampToScrollRegion(count);
 
         for (int i = 0; i < count; i++)
         {
@@ -933,6 +959,8 @@ public class InputHandler
         // Only works in scroll region
         if (_buffer.Y < _buffer.ScrollTop || _buffer.Y > _buffer.ScrollBottom)
             return;
+
+        count = ClampToScrollRegion(count);
 
         for (int i = 0; i < count; i++)
         {
@@ -992,13 +1020,15 @@ public class InputHandler
 
     private void ScrollUp(Params parameters)
     {
-        var count = Math.Max(parameters.GetParam(0, 1), 1);
+        // Scrolling the region more than its own height leaves it blank; the extra iterations
+        // only cost time. See ClampToScrollRegion.
+        var count = ClampToScrollRegion(Math.Max(parameters.GetParam(0, 1), 1));
         _buffer.ScrollUp(count);
     }
 
     private void ScrollDown(Params parameters)
     {
-        var count = Math.Max(parameters.GetParam(0, 1), 1);
+        var count = ClampToScrollRegion(Math.Max(parameters.GetParam(0, 1), 1));
         _buffer.ScrollDown(count);
     }
 
@@ -1022,10 +1052,17 @@ public class InputHandler
         _buffer.SetCursor(_buffer.X, row);
     }
 
+    /// <summary>
+    /// Clamps a tab-count parameter. A cursor cannot move past more tab stops than the line has
+    /// columns, so anything beyond that is a no-op that still costs an iteration — the same
+    /// unbounded-loop hazard as <see cref="ClampToScrollRegion"/>, reached via CSI 999999999 I.
+    /// </summary>
+    private int ClampToColumns(int count) => Math.Min(count, Math.Max(_terminal.Cols, 1));
+
     private void CursorForwardTab(Params parameters)
     {
         // CHT - Cursor Forward Tabulation (CSI I)
-        var count = Math.Max(parameters.GetParam(0, 1), 1);
+        var count = ClampToColumns(Math.Max(parameters.GetParam(0, 1), 1));
         var tabWidth = _terminal.Options.TabStopWidth;
 
         for (int i = 0; i < count; i++)
@@ -1038,7 +1075,7 @@ public class InputHandler
     private void CursorBackwardTab(Params parameters)
     {
         // CBT - Cursor Backward Tabulation (CSI Z)
-        var count = Math.Max(parameters.GetParam(0, 1), 1);
+        var count = ClampToColumns(Math.Max(parameters.GetParam(0, 1), 1));
         var tabWidth = _terminal.Options.TabStopWidth;
 
         for (int i = 0; i < count; i++)
