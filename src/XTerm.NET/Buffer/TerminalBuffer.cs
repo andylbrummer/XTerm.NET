@@ -288,8 +288,25 @@ public class TerminalBuffer
     /// <summary>
     /// Resizes the buffer.
     /// </summary>
-    public void Resize(int newCols, int newRows)
+    /// <param name="reflow">
+    /// Re-split wrapped lines at the new width instead of clipping or padding each physical line.
+    /// <para>
+    /// True for the normal buffer, where the alternative is lossy: narrowing discards the
+    /// right-hand side of every long line and widening leaves them broken at the old margin.
+    /// False for the alternate buffer, whose owner repaints it on SIGWINCH — rearranging those
+    /// cells produces a frame the program never drew and is about to overwrite.
+    /// </para>
+    /// </param>
+    public void Resize(int newCols, int newRows, bool reflow = false)
     {
+        // Reflow needs the OLD width to reconstruct logical lines, so it runs before anything
+        // else touches the layout. Width-only: a height change moves no text between lines.
+        if (reflow && newCols != _cols && _lines.Length > 0)
+        {
+            ReflowToWidth(newCols, newRows);
+            return;
+        }
+
         // Calculate new max length keeping the same scrollback capacity
         var newMaxLength = newRows + (_lines.MaxLength - _rows);
 
@@ -367,5 +384,74 @@ public class TerminalBuffer
             sb.AppendLine();
         }
         return sb.ToString();
+    }
+    /// <summary>
+    /// Rebuilds the line list at <paramref name="newCols"/>, preserving logical lines, then
+    /// re-anchors the viewport and cursor.
+    /// </summary>
+    private void ReflowToWidth(int newCols, int newRows)
+    {
+        // Only reflow up to the last row that holds something. The rows below are padding that
+        // exists to fill the viewport, not content the program wrote. Reflowing them turns each
+        // blank into its own logical line, so a line that grows from one row to two pushes the
+        // padding down, the list gets longer than the viewport, and the top of the content
+        // scrolls off — the text is preserved and then hidden, which looks exactly like the
+        // clipping this feature removes.
+        var contentEnd = -1;
+        for (var i = 0; i < _lines.Length; i++)
+        {
+            if ((_lines[i]?.GetTrimmedLength() ?? 0) > 0)
+                contentEnd = i;
+        }
+        // Never drop the row the cursor is on, even when it is blank: that is where the next
+        // character lands.
+        contentEnd = Math.Max(contentEnd, _yBase + _y);
+
+        var snapshot = new List<BufferLine?>(contentEnd + 1);
+        for (var i = 0; i <= contentEnd && i < _lines.Length; i++)
+            snapshot.Add(_lines[i]);
+
+        var reflowed = TerminalBufferReflow.Reflow(
+            snapshot, _cols, newCols,
+            cursorRow: _yBase + _y,
+            cursorCol: _x,
+            out var newCursorRow,
+            out var newCursorCol);
+
+        var newMaxLength = newRows + (_lines.MaxLength - _rows);
+        _lines.Clear();
+        _lines.Resize(newMaxLength);
+
+        // Push in order; the circular list drops the oldest once capacity is reached, which is
+        // the same scrollback eviction a normal write would cause.
+        var dropped = Math.Max(0, reflowed.Count - newMaxLength);
+        for (var i = dropped; i < reflowed.Count; i++)
+            _lines.Push(reflowed[i]);
+
+        var fillCell = BufferCell.Space;
+        while (_lines.Length < newRows)
+            _lines.Push(new BufferLine(newCols, fillCell));
+
+        _cols = newCols;
+
+        var oldRows = _rows;
+        _rows = newRows;
+
+        // Anchor the viewport at the bottom, then pull it back if that would scroll the cursor
+        // off the top — a cursor outside the viewport is the one outcome that always looks broken.
+        var cursorAbsolute = Math.Max(0, newCursorRow - dropped);
+        _yBase = Math.Max(0, _lines.Length - newRows);
+        if (cursorAbsolute < _yBase)
+            _yBase = cursorAbsolute;
+
+        _yDisp = _yBase;
+        _y = Math.Clamp(cursorAbsolute - _yBase, 0, newRows - 1);
+        _x = Math.Clamp(newCursorCol, 0, newCols - 1);
+
+        if (_scrollBottom == oldRows - 1)
+            _scrollBottom = newRows - 1;
+        else
+            _scrollBottom = Math.Min(_scrollBottom, newRows - 1);
+        _scrollTop = Math.Min(_scrollTop, newRows - 1);
     }
 }

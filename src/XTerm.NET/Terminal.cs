@@ -279,9 +279,11 @@ public class Terminal
         Cols = cols;
         Rows = rows;
 
-        // Resize buffers
-        _normalBuffer?.Resize(cols, rows);
-        _altBuffer?.Resize(cols, rows);
+        // Resize buffers. Only the normal buffer reflows: the alternate buffer belongs to a
+        // full-screen program that repaints it on SIGWINCH, so rearranging its cells would show a
+        // frame the program never drew and is about to overwrite.
+        _normalBuffer?.Resize(cols, rows, reflow: true);
+        _altBuffer?.Resize(cols, rows, reflow: false);
 
         Resized?.Invoke(this, new TerminalEvents.ResizeEventArgs(cols, rows));
     }

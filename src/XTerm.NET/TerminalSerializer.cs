@@ -129,7 +129,15 @@ public static class TerminalSerializer
                 sb.Append("\r\n");
             firstLine = false;
 
-            WriteLineCells(line, sb, ref current, ref openLink);
+            // A line whose SUCCESSOR is a continuation must be emitted at full width. Trimming
+            // its trailing blanks would delete characters that are part of the logical line —
+            // a space landing exactly on the right margin disappears, and the next row's text
+            // butts straight up against the previous word.
+            var continues = row + 1 <= lastRow
+                            && row + 1 < lines.Length
+                            && lines[row + 1]?.IsWrapped == true;
+
+            WriteLineCells(line, sb, ref current, ref openLink, continues ? terminal.Cols : -1);
         }
 
         // Close a link left open at the end of the region, or everything the program writes
@@ -152,12 +160,19 @@ public static class TerminalSerializer
         sb.Append(Csi).Append(buffer.Y + 1).Append(';').Append(buffer.X + 1).Append('H');
     }
 
+    /// <param name="fullWidth">
+    /// Emit exactly this many columns instead of stopping at the trimmed length. Used for a line
+    /// that a continuation follows, where trailing blanks are content rather than padding.
+    /// -1 trims.
+    /// </param>
     private static void WriteLineCells(
-        BufferLine line, StringBuilder sb, ref AttributeData current, ref string? openLink)
+        BufferLine line, StringBuilder sb, ref AttributeData current, ref string? openLink,
+        int fullWidth)
     {
         // Trailing blanks carry no information — the receiving terminal is already blank there —
-        // and emitting them would be most of the payload for a typical screen.
-        var length = line.GetTrimmedLength();
+        // and emitting them would be most of the payload for a typical screen. The exception is a
+        // line that wraps into the next one; see fullWidth.
+        var length = fullWidth >= 0 ? fullWidth : line.GetTrimmedLength();
 
         for (var col = 0; col < length; col++)
         {
