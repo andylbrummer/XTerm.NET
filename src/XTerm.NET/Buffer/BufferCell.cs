@@ -16,6 +16,24 @@ public struct BufferCell : IEquatable<BufferCell>
     public AttributeData Attributes = AttributeData.Default;
     public int CodePoint = 0;
 
+    /// <summary>
+    /// OSC 8 hyperlink target for this cell, or null when the cell is not part of a link.
+    ///
+    /// <para>
+    /// Cell state rather than terminal state, because that is what a link IS: OSC 8 opens a run,
+    /// the cells written inside it carry the target, and the closing sequence ends the run. The
+    /// terminal's <c>CurrentHyperlink</c> only says what the NEXT cell would get. Without it
+    /// stored here a link exists solely as a transient event: it can be rendered as it arrives,
+    /// but it cannot be found again by hit-testing the buffer, cannot survive a redraw, and
+    /// cannot be serialized.
+    /// </para>
+    /// <para>
+    /// Every cell in a run shares one string reference (the handler holds it for the run's
+    /// duration), so the cost is the reference, not a copy per cell.
+    /// </para>
+    /// </summary>
+    public string? Hyperlink = null;
+
     public static BufferCell Empty => new BufferCell();
 
     public static BufferCell Space => new BufferCell
@@ -51,12 +69,18 @@ public struct BufferCell : IEquatable<BufferCell>
 
     public bool IsSpace() => CodePoint == Space.CodePoint;
 
+    /// <summary>
+    /// Includes <see cref="Hyperlink"/>: two cells with identical glyphs and attributes but
+    /// different link targets are not the same cell, and a consumer that coalesces runs by
+    /// equality would otherwise merge across a link boundary.
+    /// </summary>
     public bool Equals(BufferCell other)
     {
         return Content == other.Content &&
                Width == other.Width &&
                Attributes.Equals(other.Attributes) &&
-               CodePoint == other.CodePoint;
+               CodePoint == other.CodePoint &&
+               Hyperlink == other.Hyperlink;
     }
 
     public override bool Equals(object? obj)
@@ -66,7 +90,7 @@ public struct BufferCell : IEquatable<BufferCell>
 
     public override int GetHashCode()
     {
-        return HashCode.Combine(Content, Width, Attributes, CodePoint);
+        return HashCode.Combine(Content, Width, Attributes, CodePoint, Hyperlink);
     }
 
     public static bool operator ==(BufferCell left, BufferCell right)

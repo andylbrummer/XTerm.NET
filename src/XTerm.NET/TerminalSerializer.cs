@@ -112,6 +112,7 @@ public static class TerminalSerializer
             lastRow = lines.Length - 1;
 
         var current = AttributeData.Default;
+        string? openLink = null;
         var firstLine = true;
 
         for (var row = firstRow; row <= lastRow; row++)
@@ -128,7 +129,15 @@ public static class TerminalSerializer
                 sb.Append("\r\n");
             firstLine = false;
 
-            WriteLineCells(line, sb, ref current);
+            WriteLineCells(line, sb, ref current, ref openLink);
+        }
+
+        // Close a link left open at the end of the region, or everything the program writes
+        // afterwards silently becomes part of it.
+        if (openLink is not null)
+        {
+            AppendHyperlink(sb, null);
+            openLink = null;
         }
 
         // Reset attributes before positioning so the cursor does not inherit the last cell's
@@ -143,7 +152,8 @@ public static class TerminalSerializer
         sb.Append(Csi).Append(buffer.Y + 1).Append(';').Append(buffer.X + 1).Append('H');
     }
 
-    private static void WriteLineCells(BufferLine line, StringBuilder sb, ref AttributeData current)
+    private static void WriteLineCells(
+        BufferLine line, StringBuilder sb, ref AttributeData current, ref string? openLink)
     {
         // Trailing blanks carry no information — the receiving terminal is already blank there —
         // and emitting them would be most of the payload for a typical screen.
@@ -164,8 +174,34 @@ public static class TerminalSerializer
                 current = cell.Attributes;
             }
 
+            // OSC 8 runs are opened and closed around the cells that carry a target. Compared by
+            // value, not reference: a run re-opened with the same URL should not be split, and
+            // two adjacent runs to different URLs must not be merged.
+            if (cell.Hyperlink != openLink)
+            {
+                AppendHyperlink(sb, cell.Hyperlink);
+                openLink = cell.Hyperlink;
+            }
+
             sb.Append(cell.Content.Length > 0 ? cell.Content : " ");
         }
+    }
+
+    /// <summary>
+    /// Opens an OSC 8 hyperlink run, or closes the open one when <paramref name="url"/> is null.
+    /// </summary>
+    /// <remarks>
+    /// The empty <c>params</c> field is deliberate. An <c>id=</c> would let a terminal treat
+    /// split runs as one link for hover highlighting, but ids are only meaningful within a single
+    /// stream and inventing them here could collide with ids the program is already using. Every
+    /// terminal that supports OSC 8 accepts the id-less form.
+    ///
+    /// <para>Terminated with ST (ESC \) rather than BEL: OSC 8 URLs may contain characters that
+    /// make BEL termination ambiguous, and ST is what the specification uses.</para>
+    /// </remarks>
+    private static void AppendHyperlink(StringBuilder sb, string? url)
+    {
+        sb.Append(Esc).Append("]8;;").Append(url ?? string.Empty).Append(Esc).Append('\\');
     }
 
     /// <summary>

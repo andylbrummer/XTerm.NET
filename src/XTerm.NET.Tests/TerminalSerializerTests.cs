@@ -281,6 +281,65 @@ public class TerminalSerializerTests
         Assert.Equal(y, source.Buffer.Y);
     }
 
+    /// <summary>
+    /// OSC 8 links must survive, because they are what a modern CLI puts file paths and issue
+    /// numbers behind. Before hyperlinks were stored on the cell they existed only as a transient
+    /// event and vanished from any redraw.
+    /// </summary>
+    [Fact]
+    public void Hyperlink_RoundTrips()
+    {
+        var source = Feed("see ]8;;https://example.com/a\\link text]8;;\\ done");
+        var replayed = RoundTrip(source);
+
+        Assert.Equal(ScreenText(source), ScreenText(replayed));
+
+        var line = replayed.Buffer.Lines[replayed.Buffer.YBase]!;
+        Assert.Equal("https://example.com/a", line[4].Hyperlink);   // inside the run
+        Assert.Null(line[0].Hyperlink);                              // before it
+        Assert.Null(line[line.GetTrimmedLength() - 1].Hyperlink);    // after it
+    }
+
+    [Fact]
+    public void AdjacentHyperlinksToDifferentTargets_AreNotMerged()
+    {
+        var source = Feed(
+            "]8;;https://a\\AAA]8;;\\" +
+            "]8;;https://b\\BBB]8;;\\");
+        var replayed = RoundTrip(source);
+
+        var line = replayed.Buffer.Lines[replayed.Buffer.YBase]!;
+        Assert.Equal("https://a", line[0].Hyperlink);
+        Assert.Equal("https://b", line[3].Hyperlink);
+    }
+
+    [Fact]
+    public void UnclosedHyperlink_IsClosedBySerializer()
+    {
+        // A program that opened a link and never closed it must not turn everything written
+        // after the replay into part of that link.
+        var source = Feed("]8;;https://example.com\\dangling");
+        var replayed = RoundTrip(source);
+
+        replayed.Write("after");
+        var line = replayed.Buffer.Lines[replayed.Buffer.YBase]!;
+        var afterIndex = line.GetTrimmedLength() - 1;
+        Assert.Null(line[afterIndex].Hyperlink);
+    }
+
+    [Fact]
+    public void HyperlinkWithAttributes_RoundTripsBoth()
+    {
+        var source = Feed("[38;2;0;150;255;4m]8;;https://example.com\\styled]8;;\\[0m");
+        var replayed = RoundTrip(source);
+
+        var line = replayed.Buffer.Lines[replayed.Buffer.YBase]!;
+        Assert.Equal("https://example.com", line[0].Hyperlink);
+        Assert.True(line[0].Attributes.IsUnderline());
+        Assert.Equal(1, line[0].Attributes.GetFgColorMode());
+        AssertRowAttributesMatch(source, replayed, row: 0);
+    }
+
     /// <summary>Compares every cell's attributes on one row between two terminals.</summary>
     private static void AssertRowAttributesMatch(Terminal expected, Terminal actual, int row)
     {

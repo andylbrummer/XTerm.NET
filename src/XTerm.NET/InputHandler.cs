@@ -156,7 +156,9 @@ public class InputHandler
             Content = translatedData,
             Width = width,
             Attributes = _curAttr,
-            CodePoint = translatedData.Length > 0 ? char.ConvertToUtf32(translatedData, 0) : 0
+            CodePoint = translatedData.Length > 0 ? char.ConvertToUtf32(translatedData, 0) : 0,
+            // Null outside a link run, which is the common case.
+            Hyperlink = _terminal.CurrentHyperlink
         };
 
         // Insert mode handling
